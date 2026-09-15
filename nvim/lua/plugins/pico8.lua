@@ -1,3 +1,39 @@
+-- Force-restart the LSP client(s) attached to the current buffer.
+-- Plain :e! only re-reads the file text; it doesn't make the server
+-- discard its (possibly desynced) internal document state the way a
+-- full close+reopen does. This stops the client(s) and re-triggers a
+-- fresh attach, which is what actually clears stuck/stale diagnostics
+-- after pico8_ls falls out of sync with externally-edited files.
+vim.api.nvim_create_user_command("PicoLspRestart", function()
+  local bufnr = vim.api.nvim_get_current_buf()
+  for _, client in ipairs(vim.lsp.get_clients({ bufnr = bufnr })) do
+    client:stop()
+  end
+  vim.defer_fn(function()
+    vim.cmd("edit")
+  end, 200)
+end, {})
+
+-- lazydev.nvim unconditionally overwrites lua_ls's root_dir (see
+-- lazydev/integrations/lspconfig.lua), clobbering the *.p8 exclusion
+-- below regardless of plugin load order, since root_dir is a whole
+-- function value and whichever config merges in last wins outright --
+-- there's no partial merge. So instead of trying to win that race,
+-- just stop lua_ls immediately after it attaches to any buffer inside
+-- a *.p8 project. This works no matter which root_dir "won".
+vim.api.nvim_create_autocmd("LspAttach", {
+  callback = function(args)
+    local client = vim.lsp.get_clients({ id = args.data.client_id })[1]
+    if not client or client.name ~= "lua_ls" then
+      return
+    end
+    local fname = vim.api.nvim_buf_get_name(args.buf)
+    if require("lspconfig.util").root_pattern("*.p8")(fname) then
+      client:stop()
+    end
+  end,
+})
+
 return {
   {
     "neovim/nvim-lspconfig",
